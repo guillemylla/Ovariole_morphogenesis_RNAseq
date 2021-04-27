@@ -16,13 +16,13 @@ output:
 Citation:
 
 Tarikere, S., Ylla, G.,& Extavour, C. G. "Distinct gene expression dynamics in germ line and somatic tissue during ovariole morphogenesis in *Drosophila melanogaster*", 2021.
+
 ---
 
 ```{r message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
 # conda activate newEnv
-.libPaths("x86_64-pc-linux-gnu-library/3.6/")
+#.libPaths("x86_64-pc-linux-gnu-library/3.6/")
 library(ggplot2)
-#library(ggfortify) # for plotting pca
 library(stringr)
 library(viridis)
 library(tidyr)
@@ -353,9 +353,4 @@ Plot_DEA_by_stage_Uncharacterized
 
 ```
 
-# Session Info
-
-```{r}
-sessionInfo()
-```
 
