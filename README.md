@@ -1,6 +1,6 @@
 # Ovariole morphogenesis RNAseq
 
-Scripts used to process and analyze the data and obtain the results of the article "Distinct gene expression dynamics in germ line and somatic tissue during ovariole morphogenesis in *Drosophila melanogaster*"
+Scripts used to process and analyze the RNA-seq data from *Drosophila melanogaster* ovariole morphogenesis and reproduce the results from the article "Distinct gene expression dynamics in germ line and somatic tissue during ovariole morphogenesis in *Drosophila melanogaster*"
 
 ---------------
 ![pubstatus](https://img.shields.io/badge/Submitted:-Under_review-orange)
