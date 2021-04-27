@@ -49,7 +49,6 @@ knitr::opts_chunk$set(warnings = FALSE)
 
 
 ```{r}
-load( file="data/VST_WO.Rda")
 Meta_BioSample_3<-read.csv(file="data/Meta_BioSample_3.csv", sep=",")
 rownames(Meta_BioSample_3)<-Meta_BioSample_3$BioSample_GY
 Counts_metadata_long<-readr::read_tsv(file="data/WholeOvary_metadata_long.tsv")
