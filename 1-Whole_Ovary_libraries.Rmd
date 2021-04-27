@@ -1,5 +1,5 @@
 ---
-title: "Whole Ovary Dataset Analysis"
+title: "Whole Ovary RNA-seq Analysis"
 output:
   html_document:
     df_print: paged
@@ -7,18 +7,20 @@ output:
     toc_depth: 5
 ---
 
---------------------
+---
 
 - Guillem Ylla, Ph.D.
 - Harvard University
 - April 2021
 
----------------------
+Citation:
+
+Tarikere, S., Ylla, G.,& Extavour, C. G. "Distinct gene expression dynamics in germ line and somatic tissue during ovariole morphogenesis in *Drosophila melanogaster*", 2021.
+---
 
 ```{r message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
-#export PATH="/home/ysland/miniconda3/envs/newEnv/bin/:$PATH"
-#export RSTUDIO_WHICH_R=/home/ysland/miniconda3/envs/newEnv/bin/R
-#.libPaths("x86_64-pc-linux-gnu-library/3.6/")
+# conda activate newEnv
+.libPaths("x86_64-pc-linux-gnu-library/3.6/")
 library(ggplot2)
 #library(ggfortify) # for plotting pca
 library(stringr)
@@ -44,21 +46,21 @@ knitr::opts_chunk$set(warnings = FALSE)
 
 ## Load Data
 
-- Load VST-normalized counts
+- Load counts table
   - RNA-seq mapping was performed with RSEM in this [script](Run_RSEM_batch.sh)
 
 
 ```{r}
 Meta_BioSample_3<-read.csv(file="data/Meta_BioSample_3.csv", sep=",")
 rownames(Meta_BioSample_3)<-Meta_BioSample_3$BioSample_GY
-Counts_metadata_long<-readr::read_tsv(file="data/WholeOvary_metadata_long.tsv")
-Counts_wide<-read.csv(file="data/WholeOvary_table_counts_wide.tsv",sep="\t")
+Counts_metadata_long<-readr::read_tsv(file="data/WholeOvary_metadata_long.tsv") # long format prefered for tidyverse with metadata
+Counts_wide<-read.csv(file="data/WholeOvary_table_counts_wide.tsv",sep="\t") # wide format 
 ```
 
 
 
 
-## Normalize 
+## Normalitzation 
 
 
 - make table wide for DESeq2
