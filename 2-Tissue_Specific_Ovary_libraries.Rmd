@@ -1,0 +1,1267 @@
+---
+title: "Tissue-specific RNA-seq Analysis"
+output:
+  html_document:
+    df_print: paged
+    toc: true
+    toc_depth: 5
+---
+
+---
+
+- Guillem Ylla, Ph.D.
+- Harvard University
+- April 2021
+
+Citation:
+
+Tarikere, S., Ylla, G.,& Extavour, C. G. "Distinct gene expression dynamics in germ line and somatic tissue during ovariole morphogenesis in *Drosophila melanogaster*", 2021.
+
+---
+
+```{r message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+#.libPaths("x86_64-pc-linux-gnu-library/3.6/")
+library(ggplot2)
+library(ggfortify) # for plotting pca
+library(stringr)
+library(viridis)
+library(tidyr)
+library(dplyr)
+library(forcats)
+library(RColorBrewer)
+library(ggthemes)
+library(ggrepel)
+#devtools::install_github("ropensci/plotly")
+library(plotly)
+library(DESeq2)
+source("Aux_functions.R")
+library("AnnotationDbi")
+library("org.Dm.eg.db")
+
+knitr::opts_chunk$set(fig.width = 12)
+knitr::opts_chunk$set(fig.height =  8)
+knitr::opts_chunk$set(cache = TRUE)
+knitr::opts_chunk$set(message = FALSE)
+knitr::opts_chunk$set(warnings = FALSE)
+
+```
+
+
+## Load Data
+
+- Load counts table
+  - RNA-seq mapping was performed with RSEM in this [script](Run_RSEM_batch.sh)
+
+
+```{r}
+Metadata_Ctrl_GS_sorted<-read.csv(file="data/Metadata_Ctrl_GS_sorted.tsv", sep="\t")  
+rownames(Metadata_Ctrl_GS_sorted)<-Metadata_Ctrl_GS_sorted$BioSample_GY
+#Counts_GS_Ctrl_metadata_long<-readr::read_tsv(file="data/Germ_Soma_table_counts_metadata_long_ctrl.tsv") # long format prefered for tidyverse with metadata
+Counts_GS_Ctrl_wide<-read.csv(file="data/Germ_Soma_table_counts_wide_ctrl.tsv",sep="\t") # wide format 
+```
+
+
+
+
+## Normalitzation 
+
+```{r}
+Counts_GS_Ctrl_wide_round<-round(Counts_GS_Ctrl_wide,0)
+Counts_GS_Ctrl_wide_round_nz<-Counts_GS_Ctrl_wide_round[which(rowSums(Counts_GS_Ctrl_wide_round)>0),]
+dim(Counts_GS_Ctrl_wide_round_nz)
+
+#identical(rownames(Metadata_Ctrl_GS_sorted) , colnames(Counts_GS_Ctrl_wide))
+
+dds_Ctrl_GS <- DESeq2::DESeqDataSetFromMatrix(countData = Counts_GS_Ctrl_wide_round_nz,
+                              colData = Metadata_Ctrl_GS_sorted,
+                              design= ~Stage_GY+CellType_GY)
+```
+- Get VST
+
+```{r}
+VST_Ctrl_GS <- assay(varianceStabilizingTransformation(dds_Ctrl_GS, blind=TRUE))
+```
+
+
+- Transform VST table to long table (tidyr format) and add metadata
+
+```{r}
+VST_Ctrl_GS_meta<-as.data.frame(VST_Ctrl_GS) %>% 
+  tibble::rownames_to_column(var = "GeneID") %>% 
+  pivot_longer(cols=colnames(VST_Ctrl_GS),names_to="Sample", values_to="VST") %>% 
+  left_join(Metadata_Ctrl_GS_sorted, by=c("Sample"="BioSample_GY")) %>% 
+  mutate(CellType_Stage=forcats::fct_relevel(CellType_Stage, c("Germ.Early","Somatic.Early","Germ.Mid","Somatic.Mid","Germ.Late"  ,"Somatic.Late"))) %>%  
+  mutate(Stage_GY=forcats::fct_relevel(Stage_GY, c("Early","Mid","Late"))) %>% 
+  mutate(Genename = mapIds(org.Dm.eg.db, keys=as.character(GeneID),column="GENENAME", keytype="FLYBASE",multiVals="first")) %>%  ## ADD GENE NAME
+  mutate(Genename= coalesce(Genename,GeneID) ) %>%    # if Genensname is NA, uses Gene ID
+  mutate(Genensymbol = mapIds(org.Dm.eg.db, keys=as.character(GeneID),column="SYMBOL", keytype="FLYBASE",multiVals="first")) %>%  ## ADD GENE NAME
+  mutate(Genensymbol= coalesce(Genensymbol,GeneID) )  # if Genensymbol is NA, uses Gene ID
+```
+- Boxplot 
+
+```{r}
+Boxplot_VST_Ctrl_GS<- ggplot(VST_Ctrl_GS_meta, aes(x=BioSample_StageCell_GY, y=VST,  fill=CellType_Stage)) +
+  geom_boxplot()+ 
+  facet_wrap(~Stage_GY, ncol = 4, scales="free_x")+
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle = 35, hjust = .8, size=8))+
+  scale_fill_CellStage()+
+  labs(title = "Normalized Counts per gene (VST)",
+              subtitle = "",fill ="Legend")+xlab("")
+
+Boxplot_VST_Ctrl_GS
+```
+
+
+## Cell Type PCA
+
+
+
+```{r, fig.height=4}
+table_VST_Ctrl_GS_toPCA<-t(VST_Ctrl_GS)
+
+table_VST_Ctrl_GS_toPCA<-as.data.frame(table_VST_Ctrl_GS_toPCA) %>% 
+    tibble::rownames_to_column(var ="BioSample_GY") %>% 
+    dplyr::left_join(Metadata_Ctrl_GS_sorted, by=c("BioSample_GY"="BioSample_GY"))  ## ADD metadata
+
+rownames(table_VST_Ctrl_GS_toPCA)<-table_VST_Ctrl_GS_toPCA$BioSample_GY
+
+pca_VST_Ctrl_GS<-prcomp(table_VST_Ctrl_GS_toPCA[,2:nrow(VST_Ctrl_GS)+1] )
+
+
+
+var_explained <- pca_VST_Ctrl_GS$sdev^2/sum(pca_VST_Ctrl_GS$sdev^2)
+
+pca_VST_Ctrl_GS_plot<-pca_VST_Ctrl_GS$x %>% 
+  as.data.frame %>%
+  ggplot(aes(x=PC1,y=PC2)) + 
+  labs(x=paste0("PC1: ",round(var_explained[1]*100,1),"%"),
+       y=paste0("PC2: ",round(var_explained[2]*100,1),"%"),
+       title = "",color ="Color") +
+  geom_text_repel(label = str_replace_all(table_VST_Ctrl_GS_toPCA$BioSample_StageCell_GY,"_", " "), size=4) +
+  geom_point(aes(color=table_VST_Ctrl_GS_toPCA$CellType_Stage), size = 8)+
+  scale_color_CellStage()  +
+  theme_bw(base_size = 12)
+
+
+pca_VST_Ctrl_GS_plot
+
+##ggsave(pca_VST_Ctrl_GS_plot, filename = "../Figures/pca_VST_Ctrl_GS_plot.png",  width=8, height=6)
+##ggsave(pca_VST_Ctrl_GS_plot, filename = "../Figures/pca_VST_Ctrl_GS_plot.svg",  width=6, height=4)
+
+
+```
+
+
+
+## Cell type Hierarchical clustering
+
+```{r}
+Samples_GS_dist<-dist(t(VST_Ctrl_GS), method = "euclidean")
+Samples_GS_hclust<-hclust(Samples_GS_dist, method = "complete" )
+
+#png(filename="../Figures/GS_hclust.png", height=6, width = 6,res=300, units = "in")
+  plot(Samples_GS_hclust, cex = 1, hang =0.1, lwd = 2)
+#dev.off()
+
+```
+
+- Only Somatic
+
+```{r}
+SamplesSomatic_dist<-dist(t(VST_Ctrl_GS[,10:18]), method = "euclidean")
+SamplesSomatic_hclust<-hclust(SamplesSomatic_dist, method = "complete" )
+
+#png(filename="../Figures/SC_hclust.png", height=6, width = 6,res=300, units = "in")
+  plot(SamplesSomatic_hclust, cex = 1, hang =0.1, lwd = 2)
+#dev.off()
+
+```
+- Only Germ
+
+```{r}
+SamplesGerm_dist<-dist(t(VST_Ctrl_GS[,1:9]), method = "euclidean")
+SamplesGerm_dist<-hclust(SamplesGerm_dist, method = "complete" )
+
+#png(filename="../Figures/SamplesGerm_dist.png", height=6, width = 6,res=300, units = "in")
+  plot(SamplesGerm_dist, cex = 1, hang =0.1, lwd = 2)
+#dev.off()
+  
+
+```
+
+#### Cell type markers expression
+
+
+
+```{r, fig.width=4, fig.height=4}
+#filter(GeneID %in% c("FBgn0004870","FBgn0000964","FBgn0025525"))
+
+Pointplot_bab1<-VST_Ctrl_GS_meta%>%
+  mutate(CellType_Stage=fct_relevel(CellType_Stage, c("Germ.Early","Somatic.Early","Germ.Mid","Somatic.Mid","Germ.Late","Somatic.Late"))) %>%
+  mutate(Stage_GY=fct_relevel(Stage_GY, c("Early","Mid","Late"))) %>% 
+  filter(GeneID %in% c("FBgn0004870")) %>% 
+  ggplot(., aes(x=CellType_Stage   ,color=CellType_Stage, y=VST)) +
+    geom_point( position = position_jitterdodge(), size = 8)+
+    facet_wrap(~Genename+Stage_GY, ncol = 3, scales="free_x")+
+    theme_bw()+
+    theme(axis.text.x = element_text(angle = 35, hjust = .8, size=8))+
+    scale_color_CellStage()+
+    labs(title = "Expression Somatic Markers - bab1",y="Normalized counts (vst)",fill ="Legend", shape="Shape")+guides(color=FALSE)
+
+
+
+Pointplot_bab1
+
+##ggsave(Pointplot_bab1, filename = "../Figures/Pointplot_bab1.svg",  width=3, height=4)
+
+```
+
+
+
+```{r, fig.width=4, fig.height=4}
+#filter(GeneID %in% c("FBgn0004870","FBgn0000964","FBgn0025525"))
+
+Pointplot_bab2<-VST_Ctrl_GS_meta%>%
+  mutate(CellType_Stage=fct_relevel(CellType_Stage, c("Germ.Early","Somatic.Early","Germ.Mid","Somatic.Mid","Germ.Late","Somatic.Late"))) %>%
+  mutate(Stage_GY=fct_relevel(Stage_GY, c("Early","Mid","Late"))) %>% 
+  filter(GeneID %in% c("FBgn0025525")) %>% 
+  ggplot(., aes(x=CellType_Stage   ,color=CellType_Stage, y=VST)) +
+    geom_point( position = position_jitterdodge(), size = 8)+
+    facet_wrap(~Genename+Stage_GY, ncol = 3, scales="free_x")+
+    theme_bw()+
+    theme(axis.text.x = element_text(angle = 35, hjust = .8, size=8))+
+    scale_color_CellStage()+
+    labs(title = "Expression Somatic Markers - bab2",y="Normalized counts (vst)",fill ="Legend", shape="Shape")+guides(color=FALSE)
+
+
+
+Pointplot_bab2
+#ggsave(Pointplot_bab2, filename = "../Figures/Pointplot_bab2.svg",  width=3, height=4)
+
+```
+
+```{r, fig.width=4, fig.height=4}
+#filter(GeneID %in% c("FBgn0004870","FBgn0000964","FBgn0025525"))
+
+Pointplot_TJ<-VST_Ctrl_GS_meta%>%
+  mutate(CellType_Stage=fct_relevel(CellType_Stage, c("Germ.Early","Somatic.Early","Germ.Mid","Somatic.Mid","Germ.Late","Somatic.Late"))) %>%
+  mutate(Stage_GY=fct_relevel(Stage_GY, c("Early","Mid","Late"))) %>% 
+  filter(GeneID %in% c("FBgn0000964")) %>% 
+  ggplot(., aes(x=CellType_Stage   ,color=CellType_Stage, y=VST)) +
+    geom_point( position = position_jitterdodge(), size = 8)+
+    facet_wrap(~Genename+Stage_GY, ncol = 3, scales="free_x")+
+    theme_bw()+
+    theme(axis.text.x = element_text(angle = 35, hjust = .8, size=8))+
+    scale_color_CellStage()+
+    labs(title = "Expression Somatic Markers - tj",y="Normalized counts (vst)",fill ="Legend", shape="Shape")+guides(color=FALSE)
+
+
+
+Pointplot_TJ
+#ggsave(Pointplot_TJ, filename = "../Figures/Pointplot_TJ.svg",  width=3, height=4)
+```
+```{r, fig.width=4, fig.height=4}
+#filter(GeneID %in% c("FBgn0002962","FBgn0283442")) 
+
+Pointplot_nanos<-VST_Ctrl_GS_meta%>%
+  mutate(CellType_Stage=fct_relevel(CellType_Stage, c("Germ.Early","Somatic.Early","Germ.Mid","Somatic.Mid","Germ.Late","Somatic.Late"))) %>%
+  mutate(Stage_GY=fct_relevel(Stage_GY, c("Early","Mid","Late"))) %>% 
+  filter(GeneID %in% c("FBgn0002962")) %>% 
+  ggplot(., aes(x=CellType_Stage   ,color=CellType_Stage, y=VST)) +
+    geom_point( position = position_jitterdodge(), size = 8)+
+    facet_wrap(~Genename+Stage_GY, ncol = 3, scales="free_x")+
+    theme_bw()+
+    theme(axis.text.x = element_text(angle = 35, hjust = .8, size=8))+
+    scale_color_CellStage()+
+    labs(title = "Expression Somatic Markers - nanos",y="Normalized counts (vst)",fill ="Legend", shape="Shape")+guides(color=FALSE)
+
+
+
+Pointplot_nanos
+#ggsave(Pointplot_nanos, filename = "../Figures/Pointplot_nanos.svg",  width=3, height=4)
+```
+
+```{r, fig.width=3, fig.height=4}
+#filter(GeneID %in% c("FBgn0002962","FBgn0283442")) 
+
+Pointplot_vasa<-VST_Ctrl_GS_meta%>%
+  mutate(CellType_Stage=fct_relevel(CellType_Stage, c("Germ.Early","Somatic.Early","Germ.Mid","Somatic.Mid","Germ.Late","Somatic.Late"))) %>%
+  mutate(Stage_GY=fct_relevel(Stage_GY, c("Early","Mid","Late"))) %>% 
+  filter(GeneID %in% c("FBgn0283442")) %>% 
+  ggplot(., aes(x=CellType_Stage   ,color=CellType_Stage, y=VST)) +
+    geom_point( position = position_jitterdodge(), size = 8)+
+    facet_wrap(~Genename+Stage_GY, ncol = 3, scales="free_x")+
+    theme_bw()+
+    theme(axis.text.x = element_text(angle = 35, hjust = .8, size=8))+
+    scale_color_CellStage()+
+    labs(title = "Expression Somatic Markers - vasa",y="Normalized counts (vst)",fill ="Legend", shape="Shape")+guides(color=FALSE)
+
+
+
+Pointplot_vasa
+##ggsave(Pointplot_vasa, filename = "../Figures/Pointplot_vasa.svg",  width=3, height=4)
+```
+
+
+## Differential Expression Analysis (DEA)
+
+
+
+### DEA Somatic vs Germ cells across stages
+
+- Compare germ cell libraries to somatic cells libraries.
+- GO and Kegg enrichment analysis of DEGs.
+
+```{r}
+dds_Ctrl_GS <- DESeq2::DESeq(dds_Ctrl_GS)
+
+Germ_vs_Somatic_res<- results(dds_Ctrl_GS, contrast = c("CellType_GY", "Germ","Somatic"))
+
+ Germ_vs_Somatic<-Germ_vs_Somatic_res %>%as.data.frame() %>%   
+  tibble::rownames_to_column(var="GeneID") %>%as_tibble() %>%  
+  dplyr::arrange(padj) %>% 
+  dplyr::mutate(Up_in = dplyr::if_else( log2FoldChange>0, "Germ_Up","Somatic_Up" ))
+
+```
+
+
+```{r}
+
+Germ_vs_Somatic<-Germ_vs_Somatic_res %>%as.data.frame() %>%   
+  tibble::rownames_to_column(var="GeneID") %>%as_tibble() %>%  
+  dplyr::arrange(padj) %>% 
+  dplyr::mutate(Up_in = dplyr::if_else( log2FoldChange>0, "Germ_Up","Somatic_Up" ))
+
+Germ_vs_Somatic_DE<-Germ_vs_Somatic%>% 
+   filter(padj<0.01) 
+
+```
+
+
+
+```{r}
+
+DEA_Germ_vs_Somatic_Plot<-Germ_vs_Somatic_DE%>% 
+  group_by(Up_in) %>% 
+  dplyr::summarise(Genes=n()) %>% 
+  ggplot(., aes(x=Up_in)) +
+    geom_bar(aes(y=Genes),fill="black" ,stat = "identity", colour="black")+
+    #ggtitle( "DEA genes Germ (p<0.01)")+
+    ylab("# DE genes")+xlab("")+
+    theme_bw(base_size = 12)+
+    theme(axis.text.x = element_text( size=15), axis.text.y = element_text( size=15))
+
+DEA_Germ_vs_Somatic_Plot
+
+##ggsave(DEA_Germ_vs_Somatic_Plot, filename = "../Figures/DEA_Germ_vs_Somatic_Plot.png",  width=5, height=4)
+##ggsave(DEA_Germ_vs_Somatic_Plot, filename = "../Figures/DEA_Germ_vs_Somatic_Plot.svg",  width=5, height=4)
+```
+
+
+#### Plot DEA Soma vs germ
+
+```{r}
+
+Germ_vs_Somatic_DE_annot<-Germ_vs_Somatic_DE
+
+Germ_vs_Somatic_DE_annot$GENENAME<-as.character(AnnotationDbi::select(org.Dm.eg.db,keys=Germ_vs_Somatic_DE_annot$GeneID,columns=c("GENENAME" ),keytype="FLYBASE")[,2])#"GENENAME"
+
+Germ_vs_Somatic_DE_annot_Uncharacterized<-Germ_vs_Somatic_DE_annot%>% 
+  dplyr::filter(padj <0.01 ) %>% 
+  dplyr::group_by(Up_in,GENENAME )  %>% 
+  dplyr::tally() %>% 
+  dplyr::arrange(desc(n)) %>%
+  dplyr::group_by(Up_in )  %>% 
+  dplyr::mutate(per=(n/sum(n)*100)) %>% 
+  dplyr::ungroup()
+
+sum(Germ_vs_Somatic_DE_annot_Uncharacterized$per)
+
+
+
+Plot_Germ_vs_Somatic_DE_annot_Uncharacterized<-Germ_vs_Somatic_DE_annot_Uncharacterized %>% 
+  dplyr::filter(GENENAME=="uncharacterized protein") %>% 
+  ggplot(., aes(x=Up_in, y=per)) +
+    geom_bar(fill="black" ,stat = "identity", colour="black")+
+    labs(title = "% of prots within uncharacterized DEA")+
+    xlab("Up_in")+ylab("% Uncharacterized DEGs")+
+    theme_bw(base_size = 12)+
+    geom_text(aes(label=paste0(round(per,2),"%")), vjust=1.6, color="white", size=3.5)
+
+Plot_Germ_vs_Somatic_DE_annot_Uncharacterized
+##ggsave(Plot_Germ_vs_Somatic_DE_annot_Uncharacterized, filename = "../Figures/Plot_Germ_vs_Somatic_DE_annot_Uncharacterized.png",  width=4, height=4)
+##ggsave(Plot_Germ_vs_Somatic_DE_annot_Uncharacterized, filename = "../Figures/Plot_Germ_vs_Somatic_DE_annot_Uncharacterized.svg",  width=4, height=4)
+```
+
+#### GO BP  Germ  vs Soma
+
+
+
+```{r}
+
+ann_DE <- AnnotationDbi::select(org.Dm.eg.db,keys=Germ_vs_Somatic_DE$GeneID,columns=c("ENTREZID", "SYMBOL","GENENAME","FLYBASECG" ),keytype="FLYBASE")
+ann_DE$DMEL_CG<-paste0("Dmel_",ann_DE$FLYBASECG)
+Germ_vs_Somatic_DE_ann<-cbind(Germ_vs_Somatic_DE , ann_DE)
+
+
+GO_BP_GvS<- clusterProfiler::compareCluster(GeneID ~ Up_in, 
+                      data = Germ_vs_Somatic_DE_ann,
+                      OrgDb= org.Dm.eg.db,  
+                      keyType = 'FLYBASE',
+                      fun = "enrichGO", 
+                      ont  = "BP",
+                      pvalueCutoff  = 0.01,
+                      pAdjustMethod= "BH", 
+                      qvalueCutoff  = 0.01,
+                      minGSSize=30,
+                      readable=TRUE)
+
+
+## LEVEL
+GO_BP_level<-clusterProfiler::gofilter(GO_BP_GvS, level=4) 
+
+
+GO_BP_compareCluster_Germ_vs_Soma_level<-clusterProfiler::dotplot(GO_BP_level, by="count" , showCategory=50)  +ggtitle("LEVEL 4 , limit=50, GO-term Biological process: Upregulated genes Soma vs Germ")
+
+
+GO_BP_compareCluster_Germ_vs_Soma_level
+
+##ggsave(GO_BP_compareCluster_Germ_vs_Soma_level, file="../Figures/GO_BP_compareCluster_Germ_vs_Soma_level.svg", width=9, height=15)
+##ggsave(GO_BP_compareCluster_Germ_vs_Soma_level, file="../Figures/GO_BP_compareCluster_Germ_vs_Soma_level.png", width=9, height=15)
+```
+
+
+#### KEGG BP  Germ  vs Soma
+
+
+
+```{r}
+Kegg<- clusterProfiler::compareCluster(DMEL_CG ~ Up_in, 
+                      data = Germ_vs_Somatic_DE_ann,
+                      fun = "enrichKEGG", 
+                      pvalueCutoff = 0.05,
+                      pAdjustMethod="BH",
+                      organism="dme",
+                      use_internal_data=FALSE)
+
+
+
+Kegg_compareCluster_Germ_vs_Soma<-clusterProfiler::dotplot(Kegg, by="count" , showCategory=1000)+ggtitle("Kegg:Soma vs Germ")
+
+
+Kegg_compareCluster_Germ_vs_Soma
+
+##ggsave(Kegg_compareCluster_Germ_vs_Soma, file="../Figures/Kegg_compareCluster_Germ_vs_Soma.png", width=8, height=6)
+##ggsave(Kegg_compareCluster_Germ_vs_Soma, file="../Figures/Kegg_compareCluster_Germ_vs_Soma.svg", width=8, height=6)
+```
+
+
+
+
+### DEA Germ vs Somatic at  each stage
+
+```{r, warning=FALSE, results=FALSE}
+Metadata_Ctrl_GS_sorted_StageCell<-Metadata_Ctrl_GS_sorted
+Metadata_Ctrl_GS_sorted_StageCell$Stage_Cell<-paste(Metadata_Ctrl_GS_sorted_StageCell$CellType_GY, Metadata_Ctrl_GS_sorted_StageCell$Stage_GY, sep="_")
+
+
+dds_Ctrl_GS_Stage <- DESeq2::DESeqDataSetFromMatrix(countData = Counts_GS_Ctrl_wide_round_nz,
+                              colData = Metadata_Ctrl_GS_sorted_StageCell,
+                              design= ~Stage_Cell)
+dds_Ctrl_GS_Stage <- DESeq2::DESeq(dds_Ctrl_GS_Stage)
+```
+
+#### Early Germ vs Soma
+
+
+```{r}
+Germ_vs_Somatic_Early_res<- results(dds_Ctrl_GS_Stage, contrast = c("Stage_Cell", "Germ_Early","Somatic_Early"))
+
+Germ_vs_Somatic_Early<-Germ_vs_Somatic_Early_res %>%as.data.frame() %>%   
+  tibble::rownames_to_column(var="GeneID") %>%as_tibble() %>%  
+  dplyr::arrange(padj) %>% 
+  dplyr::mutate(Up_in = dplyr::if_else( log2FoldChange>0, "Germ_Up","Somatic_Up" ))
+
+#save(Germ_vs_Somatic_Early_res, file="outputs/Germ_vs_Somatic_Early_res.Rda")
+#readr::write_tsv(Germ_vs_Somatic_Early, file="outputs/DEA_Germ_vs_Somatic_Early.tsv")
+
+```
+
+#### Mid Germ vs Soma
+
+
+```{r}
+Germ_vs_Somatic_Mid_res<- results(dds_Ctrl_GS_Stage, contrast = c("Stage_Cell", "Germ_Mid","Somatic_Mid"))
+
+Germ_vs_Somatic_Mid<-Germ_vs_Somatic_Mid_res %>%as.data.frame() %>%   
+  tibble::rownames_to_column(var="GeneID") %>%as_tibble() %>%  
+  dplyr::arrange(padj) %>% 
+  dplyr::mutate(Up_in = dplyr::if_else( log2FoldChange>0, "Germ_Up","Somatic_Up" ))
+
+#readr::write_tsv(Germ_vs_Somatic_Mid, file="outputs/DEA_Germ_vs_Somatic_Mid.tsv")
+
+```
+
+
+
+#### Late Germ vs Soma
+
+
+```{r}
+Germ_vs_Somatic_Late_res<- results(dds_Ctrl_GS_Stage, contrast = c("Stage_Cell", "Germ_Late","Somatic_Late"))
+
+Germ_vs_Somatic_Late<-Germ_vs_Somatic_Late_res %>%as.data.frame() %>%   
+  tibble::rownames_to_column(var="GeneID") %>%as_tibble() %>%  
+  dplyr::arrange(padj) %>% 
+  dplyr::mutate(Up_in = dplyr::if_else( log2FoldChange>0, "Germ_Up","Somatic_Up" ))
+
+#readr::write_tsv(Germ_vs_Somatic_Late, file="outputs/DEA_Germ_vs_Somatic_Late.tsv")
+```
+
+
+## DEA each stage vs other stages (for each cell type)
+
+- For both, somatic and germ cells, each stage gainst the mean of the other 2 stages (ie.e Germ Early vs (Germ Mid+Germ Late)/2   )
+
+### Prepare data
+
+- Germ cells
+
+```{r,warning=FALSE}
+Metadata_Germ<-Metadata_Ctrl_GS_sorted %>% filter(CellType_GY=="Germ")
+
+Counts_Germ_round_nz<-Counts_GS_Ctrl_wide_round_nz %>% 
+                      dplyr::select(starts_with("G_")) %>% 
+                      filter(rowSums(.)!=0)
+
+#identical(rownames(Metadata_Germ), colnames(Counts_Germ_round_nz))
+
+dds_Germ <- DESeq2::DESeqDataSetFromMatrix(countData= Counts_Germ_round_nz ,
+                              colData = Metadata_Germ,
+                              design= ~Stage_GY+0)
+```
+
+
+
+-Somatic cells
+
+```{r}
+Metadata_Somatic<-Metadata_Ctrl_GS_sorted %>% filter(CellType_GY=="Somatic")
+
+Counts_Somatic_round_nz<-Counts_GS_Ctrl_wide_round_nz %>% 
+                      dplyr::select(starts_with("S_")) %>% 
+                      filter(rowSums(.)!=0)
+
+#identical(rownames(Metadata_Somatic), colnames(Counts_Somatic_round_nz))
+
+dds_Somatic <- DESeq2::DESeqDataSetFromMatrix(countData= Counts_Somatic_round_nz ,
+                              colData = Metadata_Somatic,
+                              design= ~Stage_GY+0)
+```
+
+### Germ Cells
+
+
+```{r, warning=FALSE, results=FALSE}
+dds_Germ <- DESeq2::DESeq(dds_Germ)
+```
+
+
+#### Early
+
+```{r}
+
+DEA_onlyGerm_Early <- DESeq2::results(dds_Germ, contrast = list( 
+  c("Stage_GYEarly"), 
+  c("Stage_GYMid","Stage_GYLate")) ,listValues=c(1, -1/2) )#,
+
+OnlyGerm_DE_Early<-DEA_onlyGerm_Early  %>%as.data.frame() %>%   
+  tibble::rownames_to_column(var="GeneID") %>%as_tibble() %>%  
+  dplyr::arrange(padj) %>% 
+  dplyr::mutate(Up_Down = dplyr::if_else( log2FoldChange>0, "Up","Down" )) 
+```
+
+
+
+#### Mid
+
+```{r}
+
+DEA_onlyGerm_Mid <- DESeq2::results(dds_Germ, contrast = list( 
+  c("Stage_GYMid"), 
+  c("Stage_GYEarly","Stage_GYLate")) ,listValues=c(1, -1/2) )#,
+
+OnlyGerm_DE_Mid<-DEA_onlyGerm_Mid  %>%as.data.frame() %>%   
+  tibble::rownames_to_column(var="GeneID") %>%as_tibble() %>%  
+  dplyr::arrange(padj) %>% 
+  dplyr::mutate(Up_Down = dplyr::if_else( log2FoldChange>0, "Up","Down" )) 
+```
+
+#### Late
+
+
+```{r}
+
+DEA_onlyGerm_Late<- DESeq2::results(dds_Germ, contrast = list( 
+  c("Stage_GYLate"), 
+  c("Stage_GYEarly","Stage_GYMid")) ,listValues=c(1, -1/2) )#,
+
+OnlyGerm_DE_Late<-DEA_onlyGerm_Late  %>%as.data.frame() %>%   
+  tibble::rownames_to_column(var="GeneID") %>%as_tibble() %>%  
+  dplyr::arrange(padj) %>% 
+  dplyr::mutate(Up_Down = dplyr::if_else( log2FoldChange>0, "Up","Down" ))
+
+```
+
+### Plots
+
+
+```{r}
+DEA_Germ_results<-rbind(cbind(OnlyGerm_DE_Early,Stage="Early"),
+                            cbind(OnlyGerm_DE_Mid,Stage="Mid"),
+                            cbind(OnlyGerm_DE_Late,Stage="Late") ) %>%   
+                    mutate(Stage=forcats::fct_relevel(Stage, c("Early","Mid","Late"))) 
+
+
+```
+
+
+```{r}
+
+DEA_Germ_results_stage<-DEA_Germ_results%>% 
+  filter(padj <0.01 ) %>% 
+  group_by(Stage) %>% 
+  dplyr::summarise(up=sum(Up_Down=="Up"),
+            down=-sum(Up_Down=="Down")) %>%
+      mutate(Stage=forcats::fct_relevel(Stage, c("Early","Mid","Late"))) %>% 
+  ggplot(., aes(x=Stage)) +
+    geom_bar(aes(y=down),fill="white", stat = "identity", colour="black")+
+    geom_bar(aes(y=up),fill="black" ,stat = "identity", colour="black")+
+    ggtitle( "DEA genes Germ (p<0.01)")+
+    ylab("# DE genes")+xlab("")+
+    theme_bw(base_size = 12)+
+    theme(axis.text.x = element_text( size=15), axis.text.y = element_text( size=15))
+
+DEA_Germ_results_stage
+
+##ggsave(DEA_Germ_results_stage, filename = "../Figures/DEA_Germ_results_stage_Plot.png",  width=5, height=4)
+##ggsave(DEA_Germ_results_stage, filename = "../Figures/DEA_Germ_results_stage_Plot.svg",  width=5, height=4)
+```
+
+
+
+```{r}
+
+DEA_Germ_results_stage_UP<-DEA_Germ_results%>% 
+    filter(padj <0.01 &  Up_Down=="Up") %>% 
+    group_by(Stage) %>% 
+    tally(name="Up") %>%     
+    mutate(Stage=forcats::fct_relevel(Stage, c("Early","Mid","Late"))) %>% 
+  ggplot(., aes(x=Stage)) +
+    geom_bar(aes(y=Up),fill="black" ,stat = "identity", colour="black")+
+    ggtitle( "DEA genes Germ (p<0.01)")+
+    ylab("# DE genes")+xlab("")+
+    theme_bw(base_size = 12)+
+    theme(axis.text.x = element_text( size=15), axis.text.y = element_text( size=15))
+
+DEA_Germ_results_stage_UP
+
+##ggsave(DEA_Germ_results_stage_UP, filename = "../Figures/DEA_Germ_results_stage_UP.svg",  width=5, height=4)
+```
+
+```{r}
+
+DEA_Germ_results_annot<-DEA_Germ_results
+
+DEA_Germ_results_annot$GENENAME<-as.character(AnnotationDbi::select(org.Dm.eg.db,keys=as.character(DEA_Germ_results_annot$GeneID),columns=c("GENENAME" ),keytype="FLYBASE")[,2])#"GENENAME"
+
+DEA_Germ_results_annot_Uncharacterized<-DEA_Germ_results_annot%>% 
+  dplyr::filter(padj <0.01 ) %>% 
+  dplyr::group_by(Stage,GENENAME )  %>% 
+  dplyr::tally() %>% 
+  dplyr::arrange(desc(n)) %>%
+  dplyr::group_by(Stage )  %>% 
+  dplyr::mutate(per=(n/sum(n)*100)) %>% 
+  dplyr::ungroup() %>% 
+  mutate(Stage=forcats::fct_relevel(Stage, c("Early","Mid","Late")))
+
+
+Plot_DEA_Germ_results_annot_Uncharacterized<-DEA_Germ_results_annot_Uncharacterized %>% 
+  dplyr::filter(GENENAME=="uncharacterized protein") %>% 
+  ggplot(., aes(x=Stage, y=per)) +
+    geom_bar(fill="black" ,stat = "identity", colour="black")+
+    labs(title = "% unchar. Germ DEA")+
+    xlab("Stage")+ylab("% Uncharacterized DEGs")+
+    theme_bw(base_size = 12)+
+    geom_text(aes(label=paste0(round(per,2),"%")), vjust=1.6, color="white", size=3.5)
+
+Plot_DEA_Germ_results_annot_Uncharacterized
+##ggsave(Plot_DEA_Germ_results_annot_Uncharacterized, filename = "../Figures/Plot_DEA_Germ_results_annot_Uncharacterized.png",  width=4, height=4)
+##ggsave(Plot_DEA_Germ_results_annot_Uncharacterized, filename = "../Figures/Plot_DEA_Germ_results_annot_Uncharacterized.svg",  width=4, height=4)
+
+```
+
+
+```{r}
+DEA_Germ_results_UP<-DEA_Germ_results %>% 
+  filter(Up_Down=="Up") %>% 
+    filter(padj <0.01 ) %>% 
+    mutate(Stage=forcats::fct_relevel(Stage, c("Early","Mid","Late")))
+
+```
+
+
+```{r}
+ann_Germ_Stage <- AnnotationDbi::select(org.Dm.eg.db,keys=as.character(DEA_Germ_results_UP$GeneID)
+                                     ,columns=c("ENTREZID", "SYMBOL","GENENAME","FLYBASECG" ),
+                                     keytype="FLYBASE")
+ann_Germ_Stage$DMEL_CG<-paste0("Dmel_",ann_Germ_Stage$FLYBASECG)
+DEA_Germ_Stage_Significant_ann<-cbind(DEA_Germ_results_UP , ann_Germ_Stage) 
+
+
+
+
+Kegg_Germ_Stage<- clusterProfiler::compareCluster(DMEL_CG ~ Stage,#+Up_Down, 
+                      data = DEA_Germ_Stage_Significant_ann,
+                      fun = "enrichKEGG", 
+                      pvalueCutoff = 0.05,
+                      pAdjustMethod="BH",
+                      organism="dme",
+                      use_internal_data=FALSE)
+
+
+
+Kegg_compareCluster_Stage_GermStages<-clusterProfiler::dotplot(Kegg_Germ_Stage, by="count" , showCategory=100)+
+  ggtitle("Kegg - Germ Cells ") +
+    theme(axis.text.x = element_text(angle = 35, hjust = 1, size=8))
+
+
+
+Kegg_compareCluster_Stage_GermStages
+
+##ggsave(Kegg_compareCluster_Stage_GermStages, file="../Figures/Kegg_compareCluster_Stage_GermStages.png", width=6, height=6)
+##ggsave(Kegg_compareCluster_Stage_GermStages, file="../Figures/Kegg_compareCluster_Stage_GermStages.svg", width=6, height=6)
+
+```
+
+### Somatic Cells
+
+
+```{r, warning=FALSE, results=FALSE}
+dds_Somatic <- DESeq2::DESeq(dds_Somatic)
+
+```
+
+
+#### Early
+
+```{r}
+
+DEA_onlySomatic_Early <- DESeq2::results(dds_Somatic, contrast = list( 
+  c("Stage_GYEarly"), 
+  c("Stage_GYMid","Stage_GYLate")) ,listValues=c(1, -1/2) )#,
+
+OnlySomatic_DE_Early<-DEA_onlySomatic_Early  %>%as.data.frame() %>%   
+  tibble::rownames_to_column(var="GeneID") %>%as_tibble() %>%  
+  dplyr::arrange(padj) %>% 
+  dplyr::mutate(Up_Down = dplyr::if_else( log2FoldChange>0, "Up","Down" )) 
+
+```
+
+
+#### Mid
+
+```{r}
+
+DEA_onlySomatic_Mid <- DESeq2::results(dds_Somatic, contrast = list( 
+  c("Stage_GYMid"), 
+  c("Stage_GYEarly","Stage_GYLate")) ,listValues=c(1, -1/2) )#,
+
+OnlySomatic_DE_Mid<-DEA_onlySomatic_Mid  %>%as.data.frame() %>%   
+  tibble::rownames_to_column(var="GeneID") %>%as_tibble() %>%  
+  dplyr::arrange(padj) %>% 
+  dplyr::mutate(Up_Down = dplyr::if_else( log2FoldChange>0, "Up","Down" )) 
+```
+
+#### Late
+
+
+```{r}
+
+DEA_onlySomatic_Late<- DESeq2::results(dds_Somatic, contrast = list( 
+  c("Stage_GYLate"), 
+  c("Stage_GYEarly","Stage_GYMid")) ,listValues=c(1, -1/2) )#,
+
+OnlySomatic_DE_Late<-DEA_onlySomatic_Late  %>%as.data.frame() %>%   
+  tibble::rownames_to_column(var="GeneID") %>%as_tibble() %>%  
+  dplyr::arrange(padj) %>% 
+  dplyr::mutate(Up_Down = dplyr::if_else( log2FoldChange>0, "Up","Down" )) 
+```
+
+```{r}
+DEA_Somatic_results<-rbind(cbind(OnlySomatic_DE_Early,Stage="Early"),
+                            cbind(OnlySomatic_DE_Mid,Stage="Mid"),
+                            cbind(OnlySomatic_DE_Late,Stage="Late") )   %>%  
+  mutate(Stage=forcats::fct_relevel(Stage, c("Early","Mid","Late"))) 
+
+```
+
+### Plots
+
+
+```{r}
+
+DEA_Somatic_results_stage<-DEA_Somatic_results%>% 
+  filter(padj <0.01 ) %>% 
+  group_by(Stage) %>% 
+  dplyr::summarise(up=sum(Up_Down=="Up"),
+            down=-sum(Up_Down=="Down")) %>% 
+  ggplot(., aes(x=Stage)) +
+    geom_bar(aes(y=down),fill="white", stat = "identity", colour="black")+
+    geom_bar(aes(y=up),fill="black" ,stat = "identity", colour="black")+
+    ggtitle( "DEA genes Somatic (p<0.01)")+
+    ylab("# DE genes")+xlab("")+
+    theme_bw(base_size = 12)+
+    theme(axis.text.x = element_text( size=15), axis.text.y = element_text( size=15))
+
+DEA_Somatic_results_stage
+
+##ggsave(DEA_Somatic_results_stage, filename = "../Figures/DEA_Somatic_results_stage_Plot.png",  width=5, height=4)
+##ggsave(DEA_Somatic_results_stage, filename = "../Figures/DEA_Somatic_results_stage_Plot.svg",  width=4.2, height=4)
+```
+
+```{r}
+
+DEA_Somatic_results_stage_Up<-DEA_Somatic_results %>% 
+    filter(padj <0.01 &  Up_Down=="Up") %>% 
+    group_by(Stage) %>% 
+    tally(name="Up") %>% 
+   ggplot(., aes(x=Stage)) +
+    geom_bar(aes(y=Up),fill="black" ,stat = "identity", colour="black")+
+     ggtitle( "DEA genes Somatic (p<0.01)")+
+    ylab("# DE genes")+xlab("")+
+    theme_bw(base_size = 12)+
+    theme(axis.text.x = element_text( size=15), axis.text.y = element_text( size=15))
+
+DEA_Somatic_results_stage_Up
+
+##ggsave(DEA_Somatic_results_stage_Up, filename = "../Figures/DEA_Somatic_results_stage_Up.svg",  width=4.2, height=4)
+```
+
+
+```{r}
+
+DEA_Somatic_results_annot<-DEA_Somatic_results
+
+DEA_Somatic_results_annot$GENENAME<-as.character(AnnotationDbi::select(org.Dm.eg.db,keys=as.character(DEA_Somatic_results_annot$GeneID),columns=c("GENENAME" ),keytype="FLYBASE")[,2])#"GENENAME"
+
+DEA_Somatic_results_annot_Uncharacterized<-DEA_Somatic_results_annot%>% 
+  dplyr::filter(padj <0.01 ) %>% 
+  dplyr::group_by(Stage,GENENAME )  %>% 
+  dplyr::tally() %>% 
+  dplyr::arrange(desc(n)) %>%
+  dplyr::group_by(Stage )  %>% 
+  dplyr::mutate(per=(n/sum(n)*100)) %>% 
+  dplyr::ungroup()
+
+sum(DEA_Somatic_results_annot_Uncharacterized$per)
+
+
+
+Plot_DEA_Somatic_results_annot_Uncharacterized<-DEA_Somatic_results_annot_Uncharacterized %>% 
+  dplyr::filter(GENENAME=="uncharacterized protein") %>% 
+  mutate(Stage=forcats::fct_relevel(Stage, c("Early","Mid","Late"))) %>%
+  ggplot(., aes(x=Stage, y=per)) +
+    geom_bar(fill="black" ,stat = "identity", colour="black")+
+    labs(title = "% Uncharacterized DEGs Somatic")+
+    xlab("Stage")+ylab("% Uncharacterized DEGs")+
+    theme_bw(base_size = 12)+
+    geom_text(aes(label=paste0(round(per,2),"%")), vjust=1.6, color="white", size=3.5)
+
+Plot_DEA_Somatic_results_annot_Uncharacterized
+##ggsave(Plot_DEA_Somatic_results_annot_Uncharacterized, filename = "../Figures/Plot_DEA_Somatic_results_annot_Uncharacterized.png",  width=4, height=4)
+##ggsave(Plot_DEA_Somatic_results_annot_Uncharacterized, filename = "../Figures/Plot_DEA_Somatic_results_annot_Uncharacterized.svg",  width=4, height=4)
+
+```
+
+
+
+```{r}
+DEA_Somatic_results_UP<-DEA_Somatic_results %>% 
+  filter(Up_Down=="Up") %>% 
+  filter(padj <0.01 ) %>% 
+  mutate(Stage=forcats::fct_relevel(Stage, c("Early","Mid","Late")))
+
+
+DEA_Somatic_results_UP%>% 
+  group_by(Stage, Up_Down) %>% 
+  tally()
+```
+
+
+
+```{r}
+ann_Somatic_Stage <- AnnotationDbi::select(org.Dm.eg.db,keys=as.character(DEA_Somatic_results_UP$GeneID)
+                                     ,columns=c("ENTREZID", "SYMBOL","GENENAME","FLYBASECG" ),
+                                     keytype="FLYBASE")
+ann_Somatic_Stage$DMEL_CG<-paste0("Dmel_",ann_Somatic_Stage$FLYBASECG)
+DEA_Somatic_Stage_Significant_ann<-cbind(DEA_Somatic_results_UP , ann_Somatic_Stage) 
+
+
+
+
+Kegg_Somatic_Stage<- clusterProfiler::compareCluster(DMEL_CG ~ Stage,#+Up_Down, 
+                      data = DEA_Somatic_Stage_Significant_ann,
+                      fun = "enrichKEGG", 
+                      pvalueCutoff = 0.05,
+                      pAdjustMethod="BH",
+                      organism="dme",
+                      use_internal_data=FALSE)
+
+
+
+Kegg_compareCluster_Stage_SomaticStages<-clusterProfiler::dotplot(Kegg_Somatic_Stage, by="count" , showCategory=100)+
+  ggtitle("Kegg - Somatic Cells ") +
+    theme(axis.text.x = element_text(angle = 35, hjust = 1, size=8))
+
+
+
+Kegg_compareCluster_Stage_SomaticStages
+
+##ggsave(Kegg_compareCluster_Stage_SomaticStages, file="../Figures/Kegg_compareCluster_Stage_SomaticStages.png", width=6, height=6)
+##ggsave(Kegg_compareCluster_Stage_SomaticStages, file="../Figures/Kegg_compareCluster_Stage_SomaticStages.svg", width=6, height=6)
+
+```
+
+
+## DEA each stage vs next stage by cell type
+
+- For each cell type, compare each stage with next (Early vs Mid & Mid vs Late)
+
+### Germ
+
+#### Early to Mid
+
+```{r, warning=FALSE, results=FALSE}
+
+DEA_onlyGerm_Early_vs_Mid <- DESeq2::results(dds_Germ, contrast = c( "Stage_GY","Early","Mid") )
+
+
+
+OnlyGerm_DE_Early_vs_Mid<-DEA_onlyGerm_Early_vs_Mid  %>%as.data.frame() %>%   
+  tibble::rownames_to_column(var="GeneID") %>%as_tibble() %>%  
+  dplyr::arrange(padj) %>% 
+  dplyr::mutate(Up_Down = dplyr::if_else( log2FoldChange>0, "Down","Up" ))# Condition vs baseline  https://support.bioconductor.org/p/62927/
+
+```
+
+
+#### Mid to Late
+
+```{r, warning=FALSE, results=FALSE}
+DEA_onlyGerm_Mid_vs_Late <- DESeq2::results(dds_Germ, contrast = c( "Stage_GY","Mid","Late") )
+
+
+
+OnlyGerm_DE_Mid_vs_Late<-DEA_onlyGerm_Mid_vs_Late  %>%as.data.frame() %>%   
+  tibble::rownames_to_column(var="GeneID") %>%as_tibble() %>%  
+  dplyr::arrange(padj) %>% 
+  dplyr::mutate(Up_Down = dplyr::if_else( log2FoldChange>0, "Down","Up" ))# Condition vs baseline  https://support.bioconductor.org/p/62927/
+
+ 
+```
+
+
+
+
+#### Plots
+```{r}
+DEA_Germ_Sequencial<-rbind(cbind(OnlyGerm_DE_Early_vs_Mid,Stage="Early_to_Mid"),
+                            cbind(OnlyGerm_DE_Mid_vs_Late,Stage="Mid_to_Late") )
+
+DEA_Germ_Sequencial_DE<-DEA_Germ_Sequencial %>%
+  mutate(Stage=fct_relevel(Stage, c("Early_to_Mid","Mid_to_Late"))) %>% 
+  filter(padj<0.01)
+```
+
+
+```{r}
+ann_Germ_Sequencial <- AnnotationDbi::select(org.Dm.eg.db,keys=as.character(DEA_Germ_Sequencial_DE$GeneID)
+                                     ,columns=c("ENTREZID", "SYMBOL","GENENAME","FLYBASECG" ),
+                                     keytype="FLYBASE")
+ann_Germ_Sequencial$DMEL_CG<-paste0("Dmel_",ann_Germ_Sequencial$FLYBASECG)
+DEA_Germ_Sequencial_Significant_ann<-cbind(DEA_Germ_Sequencial_DE , ann_Germ_Sequencial)
+
+
+
+
+Kegg_Germ_sequencial<- clusterProfiler::compareCluster(DMEL_CG ~ Stage+Up_Down, 
+                      data = DEA_Germ_Sequencial_Significant_ann,
+                      fun = "enrichKEGG", 
+                      pvalueCutoff = 0.05,
+                      pAdjustMethod="BH",
+                      organism="dme",
+                      use_internal_data=FALSE)
+Kegg_compareCluster_sequencial_GermStages<-clusterProfiler::dotplot(Kegg_Germ_sequencial, by="count" , showCategory=100)+
+  ggtitle("Kegg - Germ Cells ") +
+  ggplot2::facet_grid(~Stage, scales = "free_x" )   +
+    theme(axis.text.x = element_text(angle = 35, hjust = 1, size=8))
+
+
+
+Kegg_compareCluster_sequencial_GermStages
+
+##ggsave(Kegg_compareCluster_sequencial_GermStages, file="../Figures/Kegg_compareCluster_sequencial_GermStages.png", width=6, height=3)
+##ggsave(Kegg_compareCluster_sequencial_GermStages, file="../Figures/Kegg_compareCluster_sequencial_GermStages.svg", width=8, height=6)
+
+```
+
+
+
+
+
+
+
+### Somatic
+
+#### Early to Mid
+
+```{r, warning=FALSE, results=FALSE}
+DEA_onlySomatic_Early_vs_Mid <- DESeq2::results(dds_Somatic, contrast = c( "Stage_GY","Early","Mid") )
+
+
+OnlySomatic_DE_Early_vs_Mid<-DEA_onlySomatic_Early_vs_Mid  %>%as.data.frame() %>%   
+  tibble::rownames_to_column(var="GeneID") %>%as_tibble() %>%  
+  dplyr::arrange(padj) %>% 
+  dplyr::mutate(Up_Down = dplyr::if_else( log2FoldChange>0, "Down","Up" ))# Condition vs baseline  https://support.bioconductor.org/p/62927/
+
+```
+
+#### Mid to Late
+
+```{r, warning=FALSE, results=FALSE}
+DEA_onlySomatic_Mid_vs_Late <- DESeq2::results(dds_Somatic, contrast = c( "Stage_GY","Mid","Late") )
+
+
+OnlySomatic_DE_Mid_vs_Late<-DEA_onlySomatic_Mid_vs_Late  %>%as.data.frame() %>%   
+  tibble::rownames_to_column(var="GeneID") %>%as_tibble() %>%  
+  dplyr::arrange(padj) %>% 
+  dplyr::mutate(Up_Down = dplyr::if_else( log2FoldChange>0, "Down","Up" ))# Condition vs baseline  https://support.bioconductor.org/p/62927/
+
+```
+
+
+
+
+
+### Plots
+
+
+
+```{r}
+DEA_Somatic_Sequencial<-rbind(cbind(OnlySomatic_DE_Early_vs_Mid,Stage="Early_to_Mid"),
+                            cbind(OnlySomatic_DE_Mid_vs_Late,Stage="Mid_to_Late") )
+
+DEA_Somatic_Sequencial_DE<-DEA_Somatic_Sequencial %>%
+  mutate(Stage=fct_relevel(Stage, c("Early_to_Mid","Mid_to_Late"))) %>% 
+  filter(padj<0.01)
+```
+
+
+```{r}
+ann_Somatic_Sequencial <- AnnotationDbi::select(org.Dm.eg.db,keys=as.character(DEA_Somatic_Sequencial_DE$GeneID)
+                                     ,columns=c("ENTREZID", "SYMBOL","GENENAME","FLYBASECG" ),
+                                     keytype="FLYBASE")
+ann_Somatic_Sequencial$DMEL_CG<-paste0("Dmel_",ann_Somatic_Sequencial$FLYBASECG)
+DEA_Somatic_Sequencial_Significant_ann<-cbind(DEA_Somatic_Sequencial_DE , ann_Somatic_Sequencial)
+
+
+
+
+Kegg_Somatic_sequencial<- clusterProfiler::compareCluster(DMEL_CG ~ Stage+Up_Down, 
+                      data = DEA_Somatic_Sequencial_Significant_ann,
+                      fun = "enrichKEGG", 
+                      pvalueCutoff = 0.05,
+                      pAdjustMethod="BH",
+                      organism="dme",
+                      use_internal_data=FALSE)
+
+
+Kegg_compareCluster_sequencial_SomaticStages<-clusterProfiler::dotplot(Kegg_Somatic_sequencial, by="count" , showCategory=100)+
+  ggtitle("Kegg - Somatic Cells ")+
+   ggplot2::facet_grid(~Stage, scales = "free_x" )   +
+    theme(axis.text.x = element_text(angle = 35, hjust = 1, size=8))
+
+
+
+Kegg_compareCluster_sequencial_SomaticStages
+
+##ggsave(Kegg_compareCluster_sequencial_SomaticStages, file="../Figures/Kegg_compareCluster_sequencial_SomaticStages.png", width=8, height=6)
+##ggsave(Kegg_compareCluster_sequencial_SomaticStages, file="../Figures/Kegg_compareCluster_sequencial_SomaticStages.svg", width=8, height=6)
+
+```
+
+
+
+
+## Gene Expression Plots
+
+- Add significance levels info
+
+```{r}
+DEA_Sequenctial<-rbind( cbind(DEA_Germ_Sequencial,CellType_GY="Germ"), cbind(DEA_Somatic_Sequencial, CellType_GY="Somatic" ) )
+
+Significance_df<<-DEA_Sequenctial%>% 
+  mutate(Significant_padj = ifelse(padj <0.001 , "**",  ifelse(padj <0.05 , "*","" ) )  ) %>% 
+  mutate(Significant_pvalue = ifelse(pvalue <0.001 , "**",  ifelse( pvalue <0.05 , "*","" ) )  ) %>% 
+  mutate(Significant_pvalpadj = ifelse(padj <0.001 , "***",  ifelse( padj <0.05 , "**",ifelse( pvalue <0.01 , "*","n.s." ) ) )) %>%   mutate(Start=paste(CellType_GY, stringr::str_split(Stage, "_", n = 2, simplify = TRUE)[,1], sep=".") ) %>% 
+  mutate(End=paste(CellType_GY, stringr::str_split(Stage, "_", n = 3, simplify = TRUE)[,3], sep=".") ) 
+```
+
+
+ 
+- Function to make plots
+
+```{r, echo=FALSE }
+
+# Make a global copy of vst table
+VST_Ctrl_GS_meta_global<<-VST_Ctrl_GS_meta
+
+# Define function
+plotgenes_function<-function(genelist){
+  # Select expression of given genes
+  Selectedgenesexpression<-VST_Ctrl_GS_meta_global %>% 
+                          filter(Genensymbol %in% genelist)
+  # Set maximum and minimum values of each genes across data to make side-by-side the panels same size 
+  ## Is a small trick becaus eggplot down't allow to fx_y only row-wise
+  Maxvstdf <-  Selectedgenesexpression %>%
+    dplyr::group_by(GeneID  ) %>% 
+    dplyr::summarize(max=max(VST), min=min(VST)) %>% 
+    pivot_longer(cols=c(min, max),values_to="minmax") %>% 
+    mutate(minmax=ifelse(name=="max", minmax+0.8, minmax))# make spaceontop to add significance
+  # Join expression with max, min df, and order labels
+  df2<-Selectedgenesexpression %>% left_join(Maxvstdf, by=c("GeneID"="GeneID")) %>% 
+      mutate(CellType_Stage=fct_relevel(CellType_Stage, c("Germ.Early","Somatic.Early","Germ.Mid","Somatic.Mid","Germ.Late","Somatic.Late"))) %>%  
+      mutate(GeneID_Genename=paste(GeneID,Genename,sep=" - ")) %>% 
+      mutate(Stage_GY=fct_relevel(Stage_GY, c("Early","Mid","Late"))) 
+
+
+  # Set Y-position of significance bars
+  ypositions<-df2 %>% dplyr::filter(name=="max") %>% dplyr::select(GeneID,Genensymbol,GeneID_Genename,minmax) %>% distinct()
+  # Make object with significance info
+  Significance_df_2<-Significance_df %>% 
+    filter(GeneID%in%Selectedgenesexpression$GeneID) %>% 
+    left_join(ypositions, by="GeneID") %>% 
+    mutate(y=ifelse(Stage=="Early_to_Mid", minmax-0.6, minmax-0.4))
+  
+  
+  # Make the plot
+  Plot<-Selectedgenesexpression%>%
+    mutate(CellType_Stage=fct_relevel(CellType_Stage, c("Germ.Early","Somatic.Early","Germ.Mid","Somatic.Mid","Germ.Late","Somatic.Late"))) %>%# force order samples
+    mutate(GeneID_Genename=paste(GeneID,Genename,sep=" - ")) %>% 
+    mutate(Stage_GY=fct_relevel(Stage_GY, c("Early","Mid","Late"))) %>% # force order samples
+    ggplot(., aes(x=CellType_Stage   ,color=CellType_Stage, y=VST)) +
+    geom_point( position = position_jitterdodge(), size = 8)+
+    geom_point( data=df2, aes(x=CellType_Stage   ,color=CellType_Stage, y=minmax),  size =0, color="white",  alpha = 0)+# this invisibale points, max andmin, make side panels same height
+    ggsignif::geom_signif(data=Significance_df_2 ,
+                aes(xmin=Start, xmax=End, y_position=y,
+                annotations=paste( format(padj,  scientific=TRUE, digits =3 ),Significant_pvalpadj )),
+                textsize = 3, vjust = -0.2,color="black",manual=TRUE)+
+      #facet_wrap(~GeneID_Genename+CellType_GY, ncol = 2, scales="free")+
+    facet_wrap(~Genensymbol+CellType_GY, ncol = 2, scales="free")+
+      theme_bw()+
+      theme(axis.text.x = element_text(angle = 35, hjust = .8, size=8),legend.position = "top")+
+      scale_color_CellStage()+
+      labs(title = " ",y="Normalized counts (vst)",x="",fill ="Legend", shape="Shape",color="Legend")#+guides(color=FALSE)
+
+
+return(Plot)
+
+}
+
+```
+
+
+- Get Flybase pathways
+
+```{bash}
+#wget http://ftp.flybase.org/releases/FB2021_01/precomputed_files/genes/gene_group_data_fb_2021_01.tsv.gz -P data/
+#gzip -d data/gene_group_data_fb_2021_01.tsv.gz 
+```
+
+
+```{r,results=FALSE, warning=FALSE}
+Pathways_FB<-readr::read_tsv("data/gene_group_data_fb_2021_01.tsv", skip=8, col_names =TRUE)
+```
+
+
+
+
+###  Apoptosis  related genes
+
+```{r, fig.height=30, fig.width=8}
+Apoptosomepathway<-"FBgg0000129"
+
+APOPTOSOMEgenes<-Pathways_FB %>% 
+   dplyr::filter( Apoptosomepathway== `## FB_group_id`) %>% 
+   dplyr::select(`## FB_group_id`,FB_group_name, Group_member_FB_gene_id,Group_member_FB_gene_symbol)
+
+
+Inhibitors_Apoptosispathway<-"FBgg0000064"
+
+Inhibitors_Apoptosisgenes<-Pathways_FB %>% 
+   dplyr::filter( Inhibitors_Apoptosispathway== `## FB_group_id`) %>% 
+   dplyr::select(`## FB_group_id`,FB_group_name, Group_member_FB_gene_id,Group_member_FB_gene_symbol)
+  
+Caspasespathway<-"FBgg0000100"
+
+Caspasesgenes<-Pathways_FB %>% 
+   dplyr::filter( Caspasespathway== `## FB_group_id`) %>% 
+   dplyr::select(`## FB_group_id`,FB_group_name, Group_member_FB_gene_id,Group_member_FB_gene_symbol)
+  
+listofgenes<-c("CycE",APOPTOSOMEgenes$Group_member_FB_gene_symbol,Inhibitors_Apoptosisgenes$Group_member_FB_gene_symbol,Caspasesgenes$Group_member_FB_gene_symbol )
+
+Sup_figure_Apoptosis_related_genes<-plotgenes_function(listofgenes)
+
+Sup_figure_Apoptosis_related_genes
+
+
+
+#ggsave(Sup_figure_Apoptosis_related_genes, file="plots/Sup_figure_Apoptosis_related_genes.pdf", limitsize = FALSE, height = 6*length(Selectedgenes), dpi =100)
+#ggsave(Sup_figure_Apoptosis_related_genes, file="plots/Sup_figure_Apoptosis_related_genes.svg", limitsize = FALSE, height = 6*length(Selectedgenes), dpi =100)
+
+```
+
+
+
+#### Cell-type Markers
+
+```{r, fig.height=20}
+
+Somatic_markers<-plotgenes_function(c("bab1","bab2","tj"))
+
+Somatic_markers
+
+#ggsave(Somatic_markers, file="plots/Somatic_markers.pdf", limitsize = FALSE, height = 6*length(Selectedgenes), dpi =100)
+#ggsave(Somatic_markers, file="plots/Somatic_markers.svg", limitsize = FALSE, height = 6*length(Selectedgenes), dpi =100)
+```
+
+
+#### Hippo pathway
+
+```{r, fig.height=20}
+
+Selected_Pathways<-"FBgg0000913"
+
+Selectedgenes<- Pathways_FB %>% 
+  dplyr::filter(`## FB_group_id`==Selected_Pathways) 
+
+  
+Hippo_plots<-plotgenes_function(Selectedgenes$Group_member_FB_gene_symbol)
+
+Hippo_plots
+
+#ggsave(Hippo_plots, file="plots/Hippo_plots_v2.pdf", limitsize = FALSE, height = 6*length(Selectedgenes), dpi =100)
+#ggsave(Hippo_plots, file="plots/Hippo_plots_v2.svg", limitsize = FALSE, height = 6*length(Selectedgenes), dpi =100)
+```

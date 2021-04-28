@@ -50,10 +50,10 @@ knitr::opts_chunk$set(warnings = FALSE)
   - RNA-seq mapping was performed with RSEM in this [script](Run_RSEM_batch.sh)
 
 
-```{r}
+```{r,warning=FALSE,results=FALSE}
 Meta_BioSample_3<-read.csv(file="data/Meta_BioSample_3.csv", sep=",")
 rownames(Meta_BioSample_3)<-Meta_BioSample_3$BioSample_GY
-Counts_metadata_long<-readr::read_tsv(file="data/WholeOvary_metadata_long.tsv") # long format prefered for tidyverse with metadata
+#Counts_metadata_long<-readr::read_tsv(file="data/WholeOvary_metadata_long.tsv") # long format prefered for tidyverse with metadata
 Counts_wide<-read.csv(file="data/WholeOvary_table_counts_wide.tsv",sep="\t") # wide format 
 ```
 
@@ -72,7 +72,7 @@ Counts_wide_nz<-round(Counts_wide,0)
 
 
 
-```{r}
+```{r,warning=FALSE,results=FALSE}
 identical(colnames(Counts_wide_nz), rownames(Meta_BioSample_3))
 
 dds_WO <- DESeq2::DESeqDataSetFromMatrix(countData = Counts_wide_nz,
