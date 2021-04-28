@@ -23,9 +23,9 @@ Repository content:
 - 1-Whole_Ovary_libraries: Scripts for analyzing whole ovary RNA-seq dataset.
   - [1-Whole_Ovary_libraries.Rmd](1-Whole_Ovary_libraries.Rmd): Rmd file with the R code
   - [1-Whole_Ovary_libraries.html]( https://htmlpreview.github.io/?https://raw.githubusercontent.com/guillemylla/Ovariole_morphogenesis_RNAseq/main/1-Whole_Ovary_libraries.html): Compiled R script in html.
-  - 2-Tissue_Specific_Ovary_libraries: Scripts for analyzing the libraries of ovary germ and somatic tissues. Includes Differential Expression Analysis, KENN & GO enrichment analysis, and multiple plots.
-   - [2-Tissue_Specific_Ovary_libraries.Rmd](1-2-Tissue_Specific_Ovary_libraries.Rmd): Rmd file with the R code
-   - [2-Tissue_Specific_Ovary_libraries.html]( https://htmlpreview.github.io/?https://raw.githubusercontent.com/guillemylla/Ovariole_morphogenesis_RNAseq/main/2-Tissue_Specific_Ovary_libraries.html.html): Compiled R script in html.
+- 2-Tissue_Specific_Ovary_libraries: Scripts for analyzing the libraries of ovary germ and somatic tissues. Includes Differential Expression Analysis, KENN & GO enrichment analysis, and multiple plots.
+  - [2-Tissue_Specific_Ovary_libraries.Rmd](1-2-Tissue_Specific_Ovary_libraries.Rmd): Rmd file with the R code
+  - [2-Tissue_Specific_Ovary_libraries.html]( https://htmlpreview.github.io/?https://raw.githubusercontent.com/guillemylla/Ovariole_morphogenesis_RNAseq/main/2-Tissue_Specific_Ovary_libraries.html): Compiled R script in html.
 - [data directory](data/): Contains large data files such as tables of counts and metadata files. Raw data and tables of counts also available at [GSE172015](https://www.ncbi.nlm.nih.gov/gds/?term=GSE172015).
 - [Aux_functions.R](Aux_functions.R): Functions used along the project, mainly to determine and keep consistent with the colors
 - [Session_info.txt](Session_info.txt): Information about the package versions used in the analysis.
